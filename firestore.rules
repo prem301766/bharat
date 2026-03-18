@@ -1,0 +1,93 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // ===============================================================
+    // Assumed Data Model
+    // ===============================================================
+    //
+    // Collection: users
+    // Document ID: userId (Firebase Auth UID)
+    // Fields:
+    //   - uid: string (required) - Firebase Auth UID
+    //   - displayName: string (required) - User's full name
+    //   - email: string (required, email format) - User's email address
+    //   - language: string (optional) - Preferred regional language
+    //   - interests: list (optional) - List of skill interests
+    //   - enrolledCourses: list (optional) - IDs of courses the user is enrolled in
+    //   - createdAt: string (required, ISO 8601) - When the user joined
+    //
+    // Collection: courses
+    // Document ID: courseId
+    // Fields:
+    //   - id: string (required)
+    //   - title: string (required)
+    //   - description: string (required)
+    //   - language: string (required)
+    //   - category: string (required)
+    //   - videoUrl: string (required)
+    //   - thumbnail: string (required)
+    //   - duration: string (required)
+    //
+    // ===============================================================
+
+    // ===============================================================
+    // Helper Functions
+    // ===============================================================
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+
+    function isValidEmail(email) {
+      return email is string && email.matches("^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}$");
+    }
+
+    function isValidDateString(dateStr) {
+      return dateStr is string && dateStr.matches("^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}.*Z?$");
+    }
+
+    // ===============================================================
+    // Domain Validators
+    // ===============================================================
+    function isValidUser(data) {
+      return data.keys().hasAll(['uid', 'displayName', 'email', 'createdAt']) &&
+             data.uid == request.auth.uid &&
+             data.displayName is string && data.displayName.size() > 0 && data.displayName.size() < 100 &&
+             isValidEmail(data.email) &&
+             isValidDateString(data.createdAt) &&
+             (!('language' in data) || (data.language is string && data.language.size() < 50)) &&
+             (!('interests' in data) || (data.interests is list && data.interests.size() <= 20)) &&
+             (!('enrolledCourses' in data) || (data.enrolledCourses is list && data.enrolledCourses.size() <= 100));
+    }
+
+    // ===============================================================
+    // Rules
+    // ===============================================================
+
+    // Users collection
+    match /users/{userId} {
+      // Users can only read their own profile (contains PII like email)
+      allow read: if isOwner(userId);
+      
+      // Users can create their own profile upon first login
+      allow create: if isOwner(userId) && isValidUser(request.resource.data);
+      
+      // Users can update their own profile
+      allow update: if isOwner(userId) && isValidUser(request.resource.data) &&
+                      request.resource.data.uid == resource.data.uid &&
+                      request.resource.data.createdAt == resource.data.createdAt;
+    }
+
+    // Courses collection
+    match /courses/{courseId} {
+      // Anyone can read courses (public catalog)
+      allow read: if true;
+      
+      // Only admins can write courses (for now, we'll restrict to no one via rules, or add admin check)
+      allow write: if false; 
+    }
+  }
+}
